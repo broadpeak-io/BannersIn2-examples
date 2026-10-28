@@ -1,0 +1,3 @@
+[submodule "simid-controller"]
+	path = simid-controller
+	url = https://github.com/Broadpeak-tv/simid-controller.git
