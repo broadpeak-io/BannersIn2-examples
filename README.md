@@ -2,33 +2,23 @@
 
 Use-case examples for the [Broadpeak SIMID controller](https://github.com/Broadpeak-tv/simid-controller), for web, Android and iOS.
 
-The controller has no published package yet, so it is included as a git submodule (`simid-controller/`) and each example references it locally.
-
-## Getting started
-
-```sh
-git clone --recurse-submodules https://github.com/broadpeak-io/BannersIn2-examples.git
-# or, if already cloned:
-git submodule update --init
-```
-
-To move to a newer controller version:
-
-```sh
-git -C simid-controller fetch && git -C simid-controller checkout <tag-or-commit>
-git add simid-controller && git commit -m "Bump simid-controller"
-```
-
 ## Examples
 
 Not every example exists on every platform.
 
-_No examples published yet._
+| Use case | Web | Android | iOS |
+| --- | --- | --- | --- |
+| [Pause ads](examples/pause-ads) | [available](examples/pause-ads/web) | planned | planned |
 
 ## Layout and conventions
 
-Each use case lives in `examples/<use-case>/<platform>/` (`web`, `android`, `ios`) and links to the controller as follows:
+Each use case lives in `examples/<use-case>/<platform>/` (`web`, `android`, `ios`).
 
-- **Web:** `"@broadpeak-tv/simid-controller": "file:../../../simid-controller/web/controller"` (build the controller first with `npm install && npm run build` in `simid-controller/web/controller`).
-- **Android:** `includeBuild("<relative path>/simid-controller/android")` in `settings.gradle.kts`, then depend on the `controller` module.
-- **iOS:** reference `simid-controller/ios/SimidController/SimidController.xcodeproj` from the example's Xcode project or workspace.
+**Every example is self-contained.** It pins its own versions of every third-party component (player, SmartLib, SIMID controller), so examples can move forward independently. There is no shared workspace and no repo-level submodule.
+
+- **Web:** a normal npm project. Player and SmartLib versions are in its `package.json` and lockfile. The SIMID controller is not published as a package, so its git ref is pinned in `controller.json`; `npm run setup` (run automatically by `npm start` and `npm run build`) fetches and builds it from [its own repository](https://github.com/Broadpeak-tv/simid-controller) into a git-ignored `.deps/` folder.
+- **Android / iOS:** to be defined with the first example on each platform. The same rule applies: pin the controller version inside the example.
+
+**Stream URLs are never committed.** Examples take a stream URL at runtime, and each one links to a playbook on [developers.broadpeak.io](https://developers.broadpeak.io/docs/introduction) explaining how to configure a service. CI runs `node scripts/check-urls.mjs` to enforce this; legitimate non-stream URLs that trip it go in [`.url-allowlist`](.url-allowlist).
+
+**Branding is optional.** Web examples share one look (masthead, hero, status banner, event log) kept in a `src/branding/` folder, separate from the player code in `src/player/`. Each example documents how to run full-frame or remove the branding.

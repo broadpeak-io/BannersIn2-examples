@@ -1,0 +1,6 @@
+# URLs the url-guard (scripts/check-urls.mjs) should accept, one pattern per line.
+# `*` matches anything. Lines starting with # are comments.
+# Only add URLs that are NOT streams (docs, registries, public sample content...).
+
+# Broadpeak private npm registry used for the SmartLib packages
+https://delivery-platform.broadpeak.tv/js/*

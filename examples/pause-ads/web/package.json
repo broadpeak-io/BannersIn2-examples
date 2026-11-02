@@ -1,0 +1,32 @@
+{
+  "name": "bannersin2-example-pause-ads-web",
+  "private": true,
+  "version": "1.0.0",
+  "description": "BannersIn2 example: Pause Ads on the web (Shaka Player + SmartLib + SIMID controller)",
+  "scripts": {
+    "setup": "node scripts/setup-controller.mjs",
+    "prestart": "npm run setup",
+    "start": "webpack serve",
+    "prebuild": "npm run setup",
+    "build": "webpack --mode production",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@broadpeak/smartlib": "6.1.6-934a570",
+    "@broadpeak/smartlib-ad": "6.1.6-934a570",
+    "@broadpeak/smartlib-analytics": "6.1.6-934a570",
+    "@broadpeak/smartlib-shaka": "6.1.6-934a570",
+    "@broadpeak/smartlib-simid": "6.1.6-934a570",
+    "shaka-player": "5.3.3"
+  },
+  "devDependencies": {
+    "css-loader": "7.1.2",
+    "html-webpack-plugin": "5.6.3",
+    "style-loader": "4.0.0",
+    "ts-loader": "9.5.1",
+    "typescript": "5.5.3",
+    "webpack": "5.92.1",
+    "webpack-cli": "5.1.4",
+    "webpack-dev-server": "5.0.4"
+  }
+}

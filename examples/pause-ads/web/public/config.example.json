@@ -1,0 +1,4 @@
+{
+  "_comment": "Copy to config.local.json (git-ignored) to pre-fill the stream URL. Create the service by following the playbook linked in the README.",
+  "streamUrl": ""
+}
