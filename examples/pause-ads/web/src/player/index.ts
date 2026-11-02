@@ -5,12 +5,18 @@ import '@broadpeak/smartlib-ad'
 import '@broadpeak/smartlib-analytics'
 import '@broadpeak/smartlib-shaka'
 import { GenericSimidControllerApi } from '@broadpeak/smartlib-simid'
-import { CreativeData, MediaState } from '@broadpeak-tv/simid-controller'
-import SimidController from './SimidController'
+import { CreativeData, MediaState, SimidController } from '@broadpeak-tv/simid-controller'
 import { PlayerEvent, PlayerListener, PlayerState } from './events'
 import './player.css'
 
 export type { PlayerEvent, PlayerListener, PlayerState } from './events'
+
+// Names the SIMID controller in SmartLib's logs
+class SimidControllerAdapter extends GenericSimidControllerApi {
+  getSimidControllerName(): String {
+    return 'PauseAdsExample'
+  }
+}
 
 // SmartLib rejects with its own error objects rather than Error instances
 function describeError(e: any): string {
@@ -29,8 +35,11 @@ export class PauseAdsPlayer {
   private readonly listeners = new Set<PlayerListener>()
 
   private readonly attached: Promise<void>
+  private pauseAdDelayMs = 0
+  private creativeParameters: Record<string, string> = {}
+  private pauseAdTimer?: number
   private session?: any /* StreamingSession */
-  private bpkSimidApi?: any /* GenericSimidControllerApi */
+  private simidControllerAdapter?: SimidControllerAdapter
   private adDatas = new Map<string, any>()
   private simidControllers = new Map<string, SimidController>()
   private simidIframes = new Map<string, HTMLIFrameElement>()
@@ -62,6 +71,19 @@ export class PauseAdsPlayer {
     this.setState('idle')
   }
 
+  /** Delay between the viewer pausing and the pause ad request. Applies from the next pause. */
+  public setPauseAdDelay(seconds: number): void {
+    this.pauseAdDelayMs = Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 0
+  }
+
+  /**
+   * Key-value pairs merged into the creative's `adParameters` JSON before the SIMID controller is initialised
+   * (they reach the creative in the `SIMID:Player:init` message). Applies from the next pause ad shown.
+   */
+  public setCreativeParameters(params: Record<string, string>): void {
+    this.creativeParameters = { ...params }
+  }
+
   public on(listener: PlayerListener): () => void {
     this.listeners.add(listener)
     return () => this.listeners.delete(listener)
@@ -77,9 +99,9 @@ export class PauseAdsPlayer {
       this.setAdDataListeners(this.session)
       this.setAdEventsListeners(this.session)
 
-      this.bpkSimidApi = new GenericSimidControllerApi()
+      this.simidControllerAdapter = new SimidControllerAdapter()
       this.session.attachPlayer(this.shakaPlayer)
-      this.session.attachSimidController(this.bpkSimidApi)
+      this.session.attachSimidController(this.simidControllerAdapter)
 
       const result = await this.session.getURL(url)
       await this.shakaPlayer.load(result.url || url)
@@ -96,6 +118,7 @@ export class PauseAdsPlayer {
   }
 
   public async stop(): Promise<void> {
+    window.clearTimeout(this.pauseAdTimer)
     await this.attached // unloading while still attaching leaves Shaka without a media element
     this.simidControllers.forEach(c => c.reset())
     this.simidControllers.clear()
@@ -134,40 +157,40 @@ export class PauseAdsPlayer {
 
   private setAdDataListeners(session: any) {
     session.setAdDataListener({
-      onAdData: (adData: any) => this.log('smartlib', 'onAdData', adData),
-      onOutOfBandAdData: (adData: any) => this.log('smartlib', 'onOutOfBandAdData', adData),
+      onAdData: (adData: any) => this.log('smartlib', '`onAdData`', adData),
+      onOutOfBandAdData: (adData: any) => this.log('smartlib', '`onOutOfBandAdData`', adData),
     })
   }
 
   private setAdEventsListeners(session: any) {
     session.activateAdvertising()
     session.setAdEventsListener({
-      onPrepareAdBreak: (b: any) => this.log('smartlib', 'onPrepareAdBreak', b),
+      onPrepareAdBreak: (b: any) => this.log('smartlib', '`onPrepareAdBreak`', b),
       onAdBreakBegin: (b: any) => {
-        this.log('smartlib', 'onAdBreakBegin', b)
+        this.log('smartlib', '`onAdBreakBegin`', b)
         if (b.ooba?.name === 'pause') {
           this.activePauseAdBreak = b
           this.activePauseAdId = b.ads[0]?.adId
         }
       },
       onPrepareAd: (ad: any) => {
-        this.log('smartlib', 'onPrepareAd', ad)
+        this.log('smartlib', '`onPrepareAd`', ad)
         this.adDatas.set(ad.adId, ad)
         const res = ad.nonLinearIframeResources?.[0]
-        if (res) this.loadSimid(ad.adId, res.url, res.parameters, ad.clickURL, ad.duration ? ad.duration / 1000 : 0)
+        if (res) this.loadSimid(ad.adId, res.url, this.injectParameters(res.parameters), res.clickURL, ad.duration ? ad.duration / 1000 : 0)
       },
       onAdBegin: (ad: any) => {
-        this.log('smartlib', 'onAdBegin', ad)
+        this.log('smartlib', '`onAdBegin`', ad)
         this.simidControllers.get(ad.adId)?.start()
       },
-      onAdSkippable: (ad: any) => this.log('smartlib', 'onAdSkippable', ad),
+      onAdSkippable: (ad: any) => this.log('smartlib', '`onAdSkippable`', ad),
       onAdEnd: (ad: any) => {
-        this.log('smartlib', 'onAdEnd', ad)
+        this.log('smartlib', '`onAdEnd`', ad)
         this.simidControllers.get(ad.adId)?.reset()
         this.simidControllers.delete(ad.adId)
         this.adDatas.delete(ad.adId)
       },
-      onAdBreakEnd: (b: any) => this.log('smartlib', 'onAdBreakEnd', b),
+      onAdBreakEnd: (b: any) => this.log('smartlib', '`onAdBreakEnd`', b),
     })
   }
 
@@ -177,7 +200,7 @@ export class PauseAdsPlayer {
     // The player container is the creative's initial size
     const rect = this.rect(this.root)
     const creativeData: CreativeData = { adParameters, clickThruUrl }
-    const c = new SimidController(rect, rect, creativeUri, creativeData, duration, false, -1)
+    const c = new SimidController(rect, rect, creativeUri, creativeData, duration, false)
     c.onGetMediaState = (): MediaState => ({ currentTime: this.video.currentTime })
     c.onAddSimid = (iframe: HTMLIFrameElement) => this.addSimidIframe(adId, iframe)
     c.onShowSimid = (show: boolean) => this.showSimidIframe(adId, show)
@@ -187,12 +210,16 @@ export class PauseAdsPlayer {
     c.onPlayMedia = () => { this.endPauseAd(); this.video.play(); return true }
     // Navigation: the controller pauses the media, then hands over the landing page. It opens in a new tab.
     c.onOpenPage = (uri: string) => {
-      this.log('player', 'Opening landing page in a new tab')
+      this.log('player', '`onOpenPage`: opening the landing page in a new tab')
       window.open(uri, '_blank', 'noopener')
     }
     c.onComplete = (skipped: boolean) => this.completeAd(adId, skipped)
-    c.simidControllerApi = this.bpkSimidApi
-    c.onTraffic = (direction, raw) => this.logSimid(direction, raw)
+    c.onError = (messageType: string, errorCode: number, errorMessage: string) => {
+      this.log('simid', `Error: \`${messageType}\` code ${errorCode} ${errorMessage}`)
+    }
+    // Mirror the SIMID traffic to SmartLib (analytics) and to the event log
+    c.onMessageReceived = (message: string) => { this.simidControllerAdapter?.onMessageReceived(message); this.logSimid('received', message) }
+    c.onMessageSent = (message: string) => { this.simidControllerAdapter?.onMessageSent(message); this.logSimid('sent', message) }
     this.log('simid', `Load creative (controller v${c.getVersion()})`)
     c.load(false)
     this.simidControllers.set(adId, c)
@@ -201,7 +228,7 @@ export class PauseAdsPlayer {
   private logSimid(direction: 'received' | 'sent', raw: string) {
     let label = raw
     try { label = JSON.parse(raw).type ?? raw } catch { /* not JSON */ }
-    this.log('simid', `${direction === 'sent' ? '→ creative' : '← creative'}: ${label}`, raw)
+    this.log('simid', `${direction === 'sent' ? '→ creative' : '← creative'}: \`${label}\``, raw)
   }
 
   private addSimidIframe(adId: string, iframe: HTMLIFrameElement): boolean {
@@ -220,7 +247,7 @@ export class PauseAdsPlayer {
         this.setState('pause-ad')
         iframe.focus() // creatives handle keys themselves (e.g. resume, discard): they need the focus
       }
-      this.log('smartlib', `sendTracker impression + creativeView (${adId})`)
+      this.log('smartlib', `\`sendTracker('impression')\` + \`sendTracker('creativeView')\` for ${adId}`)
       this.session?.sendTracker('impression', adId)
       this.session?.sendTracker('creativeView', adId)
     }
@@ -241,7 +268,7 @@ export class PauseAdsPlayer {
   }
 
   private completeAd(adId: string, skipped: boolean) {
-    this.log('simid', `Creative complete (skipped: ${skipped})`)
+    this.log('simid', `Creative complete (\`skipped\`: ${skipped})`)
     // Skipping a pause ad means the viewer discarded it: close the break but stay paused.
     // (Unlike a linear ad there is nothing to seek over.)
     if (skipped && this.activePauseAdBreak) {
@@ -255,26 +282,57 @@ export class PauseAdsPlayer {
   private onVideoPaused() {
     // Seeks, the end of the stream, and pauses caused by the ad itself (e.g. navigation) are not user pauses
     if (this.video.seeking || this.video.ended || !this.session || this.activePauseAdBreak) return
-    this.log('player', 'Paused: requesting pause ads')
     this.setState('paused')
-    // autoBegin=true: SmartLib begins the break as soon as the ad arrives
-    this.session.requestOutOfBandAds('pause', 0, true, {})
+    window.clearTimeout(this.pauseAdTimer)
+    const request = () => {
+      this.pauseAdTimer = undefined
+      if (!this.session || !this.video.paused) return // resumed or stopped in the meantime
+      this.log('smartlib', "`requestOutOfBandAds('pause')`")
+      // autoBegin=true: SmartLib begins the break as soon as the ad arrives
+      this.session.requestOutOfBandAds('pause', 0, true, {})
+    }
+    if (this.pauseAdDelayMs > 0) {
+      this.log('player', `Video \`pause\` event: requesting the pause ad in ${this.pauseAdDelayMs / 1000}s`)
+      this.pauseAdTimer = window.setTimeout(request, this.pauseAdDelayMs)
+    } else {
+      this.log('player', 'Video `pause` event')
+      request()
+    }
   }
 
   private onVideoPlay() {
-    this.log('player', 'Play')
+    window.clearTimeout(this.pauseAdTimer) // resumed before the delay elapsed: no pause ad
+    this.pauseAdTimer = undefined
+    this.log('player', 'Video `play` event')
     this.endPauseAd()
   }
 
   private endPauseAd() {
     if (!this.activePauseAdBreak) return
-    this.log('player', 'Pause ad dismissed')
+    this.log('player', 'Pause ad dismissed: `endOutOfBandAdBreak`')
     this.session?.endOutOfBandAdBreak(this.activePauseAdBreak.id)
     this.activePauseAdBreak = undefined
     this.activePauseAdId = undefined
   }
 
   // ---- helpers ------------------------------------------------------------
+
+  // The creative's adParameters is a JSON string: merge the user's key-value pairs into it
+  private injectParameters(adParameters: string): string {
+    const extra = Object.entries(this.creativeParameters)
+    if (extra.length === 0) return adParameters
+    let params: Record<string, unknown> = {}
+    try {
+      params = JSON.parse(adParameters)
+    } catch {
+      this.log('player', '`adParameters` is not valid JSON: starting from an empty object', adParameters)
+    }
+    extra.forEach(([name, value]) => {
+      this.log('player', `Injecting \`${name}\` = \`${value}\` into \`adParameters\``)
+      params[name] = value
+    })
+    return JSON.stringify(params)
+  }
 
   private rect(el: HTMLElement): DOMRect {
     const r = el.getBoundingClientRect()

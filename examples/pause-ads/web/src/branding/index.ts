@@ -4,10 +4,31 @@ import faviconUrl from './assets/favicon.svg'
 import './fonts.css'
 import './branding.css'
 
+/** A demo-specific option shown in the settings panel. */
+export interface SettingDef {
+  id: string
+  label: string
+  hint?: string
+  unit?: string
+  min?: number
+  step?: number
+  value: number
+}
+
+/** An editable list of key-value pairs shown in its own panel. */
+export interface PairsDef {
+  id: string
+  title: string
+  hint?: string
+  initial?: Array<[string, string]>
+}
+
 export interface BrandingOptions {
   playbookUrl: string
   debug: boolean
   initialUrl?: string
+  settings?: SettingDef[]
+  pairs?: PairsDef[]
 }
 
 export interface BrandedShell {
@@ -16,6 +37,10 @@ export interface BrandedShell {
   handleEvent: (event: PlayerEvent) => void
   onPlay: (cb: (url: string) => void) => void
   onStop: (cb: () => void) => void
+  /** Called with the new value whenever a setting is edited (invalid input is reported as the default). */
+  onSettingChange: (cb: (id: string, value: number) => void) => void
+  /** Called with the complete set of non-empty pairs whenever one is edited, added or removed. */
+  onPairsChange: (cb: (id: string, pairs: Record<string, string>) => void) => void
   /** Plays whatever URL is currently in the input field. */
   play: () => void
 }
@@ -27,24 +52,66 @@ const TEXT = {
   heading: 'Pause the video. Show a relevant ad.',
   lead: 'When the viewer presses pause, the player asks the ad server for a pause ad and shows it as an interactive overlay on the paused frame.',
   benefits: [
-    ['Triggered by the viewer', 'The ad appears only when the viewer pauses.'],
+    ['Triggered by the viewer', 'The ad is only requested when the viewer pauses.'],
     ['Interactive creative', 'Resume, dismiss, or open a landing page.'],
     ['Measured in the player', 'Impressions and clicks are tracked in the player.'],
   ],
   footer: 'Broadpeak.io · BannersIn2 Pause Ads example',
 }
 
-// banner = the pill, status = the small text on the right
-const STATES: Record<PlayerState, { title: string; label: string; banner: 'idle' | 'primary' | 'ad'; status: string; statusState: string }> = {
-  idle: { title: 'No active playback', label: 'Ready', banner: 'idle', status: 'Ready', statusState: 'idle' },
-  loading: { title: 'Starting the session', label: 'Loading', banner: 'idle', status: 'Loading', statusState: 'loading' },
-  playing: { title: 'Playing', label: 'Content', banner: 'primary', status: 'Playing', statusState: 'playing' },
-  paused: { title: 'Paused', label: 'Waiting for a pause ad', banner: 'idle', status: 'Paused', statusState: 'idle' },
-  'pause-ad': { title: 'Pause ad showing', label: 'Pause ad', banner: 'ad', status: 'Playing', statusState: 'playing' },
-  error: { title: 'Playback error', label: 'Error', banner: 'idle', status: 'Error', statusState: 'error' },
+// The pill in the card heading: title, secondary label (shown with Advanced open) and colour
+const STATES: Record<PlayerState, { title: string; label: string; banner: 'idle' | 'primary' | 'ad' }> = {
+  idle: { title: 'No active playback', label: 'Ready', banner: 'idle' },
+  loading: { title: 'Starting the session', label: 'Loading', banner: 'idle' },
+  playing: { title: 'Playing', label: 'Content', banner: 'primary' },
+  paused: { title: 'Paused', label: 'Waiting for a pause ad', banner: 'idle' },
+  'pause-ad': { title: 'Pause ad showing', label: 'Pause ad', banner: 'ad' },
+  error: { title: 'Playback error', label: 'Error', banner: 'idle' },
 }
 
 const MAX_LOG_ROWS = 300
+
+// Text with `backticked` parts rendered as <code> (built with DOM nodes, so the text is never parsed as HTML)
+const renderInline = (el: HTMLElement, text: string) => {
+  text.split(/`([^`]+)`/).forEach((part, i) => {
+    if (i % 2 === 0) { if (part) el.append(part) } else { const c = document.createElement('code'); c.textContent = part; el.append(c) }
+  })
+}
+
+// HH:MM:SS.mmm, local time
+const timestamp = () => {
+  const d = new Date()
+  const p = (n: number, w = 2) => String(n).padStart(w, '0')
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`
+}
+
+const pairRowMarkup = (key = '', value = '') => `
+          <div class="pair-row">
+            <input class="pair-key" type="text" placeholder="key" value="${escapeAttr(key)}" autocomplete="off" spellcheck="false" autocapitalize="off" aria-label="Key">
+            <input class="pair-value" type="text" placeholder="value" value="${escapeAttr(value)}" autocomplete="off" spellcheck="false" autocapitalize="off" aria-label="Value">
+            <button class="small-button pair-remove" type="button" aria-label="Remove">×</button>
+          </div>`
+
+const pairsMarkup = (d: PairsDef) => `
+        <div class="setting pairs-block" data-pairs="${d.id}">
+          <div class="setting-head"><label>${d.title}</label>${d.hint ? `<span class="setting-hint">${d.hint}</span>` : ''}</div>
+          <div class="pair-list">${(d.initial ?? []).map(([k, v]) => pairRowMarkup(k, v)).join('')}</div>
+          <button class="small-button pair-add" type="button">+ Add</button>
+        </div>`
+
+const escapeAttr = (s: string) => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;')
+
+const settingsMarkup = (settings: SettingDef[], pairs: PairsDef[]) => settings.length + pairs.length === 0 ? '' : `
+      <section class="demo-settings" aria-label="Settings">
+        <span class="eyebrow">SETTINGS</span>
+        ${settings.length ? `<div class="setting-list">
+          ${settings.map(d => `<div class="setting">
+            <div class="setting-head"><label for="setting-${d.id}">${d.label}</label>${d.hint ? `<span class="setting-hint">${d.hint}</span>` : ''}</div>
+            <div class="setting-control"><input id="setting-${d.id}" data-setting="${d.id}" data-default="${d.value}" type="number" inputmode="decimal" value="${d.value}"${d.min !== undefined ? ` min="${d.min}"` : ''}${d.step !== undefined ? ` step="${d.step}"` : ''}>${d.unit ? `<span class="setting-unit">${d.unit}</span>` : ''}</div>
+          </div>`).join('')}
+        </div>` : ''}
+        ${pairs.map(pairsMarkup).join('')}
+      </section>`
 
 export function mountBranding(root: HTMLElement, opts: BrandingOptions): BrandedShell {
   document.title = TEXT.title
@@ -71,7 +138,6 @@ export function mountBranding(root: HTMLElement, opts: BrandingOptions): Branded
       <section class="player-card demo-player" aria-label="Video">
         <div class="card-heading">
           <span class="ad-playback-banner" data-role="banner" role="status" aria-live="polite" data-state="idle"><span class="ad-playing-dot" aria-hidden="true"></span><strong data-role="banner-title"></strong><span data-role="banner-label"></span></span>
-          <span class="status-group"><span class="status" data-role="status" role="status"></span></span>
         </div>
         <div class="video-stage">
           <div class="bp-player-slot" data-role="slot"></div>
@@ -88,6 +154,8 @@ export function mountBranding(root: HTMLElement, opts: BrandingOptions): Branded
         </div>
         <p class="demo-hint" role="alert" data-role="hint" hidden></p>
       </form>
+
+      ${settingsMarkup(opts.settings ?? [], opts.pairs ?? [])}
 
       <div class="advanced-bar"><button class="advanced-toggle" type="button" data-role="advanced-toggle" aria-expanded="false" aria-controls="advanced">Advanced <svg class="chevron" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button></div>
 
@@ -112,6 +180,39 @@ export function mountBranding(root: HTMLElement, opts: BrandingOptions): Branded
   const toggle = $('advanced-toggle')
   let playCb: (url: string) => void = () => {}
   let stopCb: () => void = () => {}
+  let settingCb: (id: string, value: number) => void = () => {}
+  let pairsCb: (id: string, pairs: Record<string, string>) => void = () => {}
+
+  root.querySelectorAll<HTMLInputElement>('input[data-setting]').forEach(el => {
+    el.addEventListener('input', () => {
+      const v = el.valueAsNumber
+      const min = el.min === '' ? -Infinity : Number(el.min)
+      settingCb(el.dataset.setting!, Number.isFinite(v) && v >= min ? v : Number(el.dataset.default))
+    })
+  })
+
+  root.querySelectorAll<HTMLElement>('[data-pairs]').forEach(panel => {
+    const list = panel.querySelector('.pair-list') as HTMLElement
+    const emit = () => {
+      const pairs: Record<string, string> = {}
+      list.querySelectorAll('.pair-row').forEach(row => {
+        const key = (row.querySelector('.pair-key') as HTMLInputElement).value.trim()
+        if (key) pairs[key] = (row.querySelector('.pair-value') as HTMLInputElement).value
+      })
+      pairsCb(panel.dataset.pairs!, pairs)
+    }
+    panel.addEventListener('input', emit)
+    panel.addEventListener('click', e => {
+      const target = e.target as HTMLElement
+      if (target.closest('.pair-add')) {
+        list.insertAdjacentHTML('beforeend', pairRowMarkup())
+        ;(list.lastElementChild!.querySelector('.pair-key') as HTMLInputElement).focus()
+      } else if (target.closest('.pair-remove')) {
+        target.closest('.pair-row')!.remove()
+        emit()
+      }
+    })
+  })
 
   const autosize = () => { input.style.height = 'auto'; input.style.height = `${input.scrollHeight + 2}px` }
   input.addEventListener('input', autosize)
@@ -133,8 +234,6 @@ export function mountBranding(root: HTMLElement, opts: BrandingOptions): Branded
     $('banner').dataset.state = s.banner
     $('banner-title').textContent = s.title
     $('banner-label').textContent = detail && state !== 'error' ? detail : s.label
-    $('status').textContent = s.status
-    $('status').dataset.state = s.statusState
     showHint(state === 'error' ? detail || 'Playback failed' : undefined)
   }
   setState('idle')
@@ -153,9 +252,9 @@ export function mountBranding(root: HTMLElement, opts: BrandingOptions): Branded
   const handleEvent = (event: PlayerEvent) => {
     if (event.type === 'state') { setState(event.state, event.detail); return }
     const row = log.insertRow()
-    row.insertCell().textContent = new Date().toLocaleTimeString()
+    row.insertCell().textContent = timestamp()
     row.insertCell().textContent = event.source
-    row.insertCell().textContent = event.message
+    renderInline(row.insertCell(), event.message)
     while (log.rows.length > MAX_LOG_ROWS) log.deleteRow(0)
     log.parentElement!.parentElement!.scrollTop = log.parentElement!.parentElement!.scrollHeight
   }
@@ -165,6 +264,8 @@ export function mountBranding(root: HTMLElement, opts: BrandingOptions): Branded
     handleEvent,
     onPlay: cb => { playCb = cb },
     onStop: cb => { stopCb = cb },
+    onSettingChange: cb => { settingCb = cb },
+    onPairsChange: cb => { pairsCb = cb },
     play,
   }
 }
