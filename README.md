@@ -23,11 +23,7 @@ git add simid-controller && git commit -m "Bump simid-controller"
 
 Not every example exists on every platform.
 
-| Use case | Web | Android | iOS |
-|---|---|---|---|
-| [Custom ad UI](examples/custom-ad-ui) | planned | planned | planned |
-| [Interactive creative](examples/interactive-creative) | planned | planned | planned |
-| [Custom component](examples/custom-component) | planned | planned | planned |
+_No examples published yet._
 
 ## Layout and conventions
 
